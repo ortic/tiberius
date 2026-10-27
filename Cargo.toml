@@ -139,6 +139,9 @@ optional = true
 [dependencies.tokio-rustls]
 version = "0.26.4"
 optional = true
+# The crypto provider comes with the `rustls` or `rustls-ring` feature.
+default-features = false
+features = ["logging", "tls12"]
 
 [dependencies.rustls-native-certs]
 version = "0.8"
@@ -248,7 +251,13 @@ sql-browser-tokio = ["tokio", "tokio-util"]
 sql-browser-smol = ["async-io", "async-net", "futures-lite"]
 integrated-auth-gssapi = ["libgssapi"]
 bigdecimal = ["bigdecimal_"]
-rustls = ["tokio-rustls", "tokio-util", "rustls-native-certs", "rustls-webpki", "rustls-pki-types"]
+# TLS with rustls; aws-lc-rs is the crypto provider unless the process
+# installed a default one (`CryptoProvider::install_default`).
+rustls = ["__rustls", "tokio-rustls/aws_lc_rs"]
+# The same with ring as the provider: no C toolchain for aws-lc-sys.
+rustls-ring = ["__rustls", "tokio-rustls/ring"]
+# rustls without a provider, for the two features above.
+__rustls = ["tokio-rustls", "tokio-util", "rustls-native-certs", "rustls-webpki", "rustls-pki-types"]
 # Bundle a compiled-in snapshot of Mozilla's root CA store, selectable via
 # `Config::trust_webpki_roots()` (rustls only). Implies `rustls`; the bundled
 # roots are a pinned snapshot that goes stale without dependency updates.

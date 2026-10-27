@@ -203,7 +203,7 @@
 #[cfg(all(
     feature = "tds80",
     not(any(
-        feature = "rustls",
+        feature = "__rustls",
         feature = "native-tls",
         feature = "vendored-openssl"
     ))

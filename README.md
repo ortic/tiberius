@@ -39,6 +39,7 @@ A native Microsoft SQL Server (TDS) client for Rust.
 | `tds73`                  | Support for new date and time types in TDS version 7.3. Disable if using version 7.2.                                            | `enabled`  |
 | `native-tls`             | Use operating system's TLS libraries for traffic encryption.                                                                     | `enabled`  |
 | `rustls`                 | Use the builtin TLS implementation from rustls instead of linking to the operating system implementation for traffic encryption. | `disabled` |
+| `rustls-ring`            | Like `rustls`, with ring instead of aws-lc-rs as the crypto provider (no C toolchain needed for aws-lc-sys). | `disabled` |
 | `vendored-openssl`       | Statically link against OpenSSL instead of dynamically linking to the operating system implementation for traffic encryption.    | `disabled` |
 | `chrono`                 | Read and write date and time values using `chrono`'s types. (for greenfield, using time instead of chrono is recommended)        | `disabled` |
 | `time`                   | Read and write date and time values using `time` crate types.                                                                    | `disabled` |

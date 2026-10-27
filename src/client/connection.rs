@@ -1,5 +1,5 @@
 #[cfg(any(
-    feature = "rustls",
+    feature = "__rustls",
     feature = "native-tls",
     feature = "vendored-openssl"
 ))]
@@ -143,7 +143,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         // the connection starts in the clear and TLS (if any) is negotiated
         // during the prelogin.
         #[cfg(any(
-            feature = "rustls",
+            feature = "__rustls",
             feature = "native-tls",
             feature = "vendored-openssl"
         ))]
@@ -162,7 +162,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         };
 
         #[cfg(not(any(
-            feature = "rustls",
+            feature = "__rustls",
             feature = "native-tls",
             feature = "vendored-openssl"
         )))]
@@ -236,7 +236,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
     }
 
     #[cfg(any(
-        feature = "rustls",
+        feature = "__rustls",
         feature = "native-tls",
         feature = "vendored-openssl"
     ))]
@@ -256,7 +256,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
     }
 
     #[cfg(not(any(
-        feature = "rustls",
+        feature = "__rustls",
         feature = "native-tls",
         feature = "vendored-openssl"
     )))]
@@ -841,7 +841,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
 
     /// Implements the TLS handshake with the SQL Server.
     #[cfg(any(
-        feature = "rustls",
+        feature = "__rustls",
         feature = "native-tls",
         feature = "vendored-openssl"
     ))]
@@ -904,7 +904,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
 
     /// Implements the TLS handshake with the SQL Server.
     #[cfg(not(any(
-        feature = "rustls",
+        feature = "__rustls",
         feature = "native-tls",
         feature = "vendored-openssl"
     )))]
@@ -951,7 +951,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
 /// compiled in. Without this check, a `Required`/`On` encryption request would
 /// silently fall back to an unencrypted connection.
 #[cfg(not(any(
-    feature = "rustls",
+    feature = "__rustls",
     feature = "native-tls",
     feature = "vendored-openssl"
 )))]
@@ -1180,7 +1180,7 @@ mod sensitive_login_tests {
 #[cfg(all(
     test,
     not(any(
-        feature = "rustls",
+        feature = "__rustls",
         feature = "native-tls",
         feature = "vendored-openssl"
     ))
