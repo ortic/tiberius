@@ -2,7 +2,10 @@ pub use crate::tds::stream::{CommandItem, QueryItem, ResultMetadata};
 use crate::{
     client::Connection,
     error::Error,
-    tds::stream::{CommandReturnValue, ReceivedToken, TokenStream},
+    tds::{
+        codec::TokenInfo,
+        stream::{CommandReturnValue, ReceivedToken, TokenStream},
+    },
     FromSql, Row,
 };
 use futures_util::io::{AsyncRead, AsyncWrite};
@@ -47,6 +50,7 @@ use std::fmt::Debug;
 #[derive(Debug)]
 pub struct ExecuteResult {
     rows_affected: Vec<u64>,
+    messages: Vec<TokenInfo>,
 }
 
 impl<'a> ExecuteResult {
@@ -55,6 +59,7 @@ impl<'a> ExecuteResult {
     ) -> crate::Result<Self> {
         let mut token_stream = TokenStream::new(connection).try_unfold();
         let mut rows_affected = Vec::new();
+        let mut messages = Vec::new();
 
         while let Some(token) = token_stream.try_next().await? {
             match token {
@@ -62,11 +67,22 @@ impl<'a> ExecuteResult {
                 ReceivedToken::DoneProc(done) => rows_affected.push(done.rows()),
                 ReceivedToken::DoneInProc(done) => rows_affected.push(done.rows()),
                 ReceivedToken::Done(done) => rows_affected.push(done.rows()),
+                ReceivedToken::Info(info) => messages.push(info),
                 _ => (),
             }
         }
 
-        Ok(Self { rows_affected })
+        Ok(Self {
+            rows_affected,
+            messages,
+        })
+    }
+
+    /// The informational messages of the batch, in the order the server
+    /// sent them: `PRINT` output, `RAISERROR` with a severity of 10 or lower,
+    /// "Changed database context to …".
+    pub fn messages(&self) -> &[TokenInfo] {
+        &self.messages
     }
 
     /// A slice of numbers of rows affected in the same order as the given
@@ -220,6 +236,7 @@ mod tests {
         fn from_counts(counts: Vec<u64>) -> Self {
             Self {
                 rows_affected: counts,
+                messages: Vec::new(),
             }
         }
     }

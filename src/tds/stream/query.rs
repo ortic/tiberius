@@ -1,4 +1,4 @@
-use crate::tds::stream::ReceivedToken;
+use crate::tds::{codec::TokenInfo, stream::ReceivedToken};
 use crate::{row::ColumnType, Column, Row};
 use futures_util::{
     ready,
@@ -92,6 +92,8 @@ pub struct QueryStream<'a> {
     token_stream: Peekable<BoxStream<'a, crate::Result<ReceivedToken>>>,
     columns: Option<Arc<Vec<Column>>>,
     result_set_index: Option<usize>,
+    /// Informational messages received and not taken yet.
+    messages: Vec<TokenInfo>,
 }
 
 impl<'a> Debug for QueryStream<'a> {
@@ -111,7 +113,19 @@ impl<'a> QueryStream<'a> {
             token_stream: token_stream.peekable(),
             columns: None,
             result_set_index: None,
+            messages: Vec::new(),
         }
+    }
+
+    /// The informational messages the server sent so far and not taken
+    /// yet: `PRINT` output, `RAISERROR` with a severity of 10 or lower,
+    /// "Changed database context to …". They come between the results, so a
+    /// caller that takes them after each item keeps their order.
+    ///
+    /// Messages of a severity above 10 are errors and end the stream with
+    /// an `Err` instead.
+    pub fn take_messages(&mut self) -> Vec<TokenInfo> {
+        std::mem::take(&mut self.messages)
     }
 
     /// Moves the stream forward until having result metadata, stream end or an
@@ -127,7 +141,10 @@ impl<'a> QueryStream<'a> {
             match item {
                 Some(ReceivedToken::NewResultset(_)) => break,
                 Some(_) => {
-                    self.token_stream.try_next().await?;
+                    // Skipped, but messages before the first result are kept.
+                    if let Some(ReceivedToken::Info(info)) = self.token_stream.try_next().await? {
+                        self.messages.push(info);
+                    }
                 }
                 None => break,
             }
@@ -205,7 +222,9 @@ impl<'a> QueryStream<'a> {
                         break;
                     }
                     _ => {
-                        self.token_stream.try_next().await?;
+                        if let Some(Info(info)) = self.token_stream.try_next().await? {
+                            self.messages.push(info);
+                        }
                         continue;
                     }
                 },
@@ -423,6 +442,10 @@ impl<'a> Stream for QueryStream<'a> {
 
                     Poll::Ready(Some(Ok(QueryItem::Row(row))))
                 }
+                ReceivedToken::Info(info) => {
+                    this.messages.push(info);
+                    continue;
+                }
                 _ => continue,
             };
         }
@@ -630,6 +653,70 @@ mod tests {
         // result_index must increment across result sets.
         assert!(results[0].iter().all(|r| r.result_index == 0));
         assert!(results[1].iter().all(|r| r.result_index == 1));
+    }
+
+    fn token_info(message: &str) -> ReceivedToken {
+        ReceivedToken::Info(TokenInfo {
+            number: 0,
+            state: 1,
+            class: 0,
+            message: message.into(),
+            server: "srv".into(),
+            procedure: String::new(),
+            line: 1,
+        })
+    }
+
+    #[tokio::test]
+    async fn query_stream_collects_messages_in_order() {
+        let mut stream = query_stream(vec![
+            token_info("before"),
+            token_meta("c"),
+            token_row(),
+            token_info("between"),
+            token_meta("d"),
+            token_info("after"),
+        ]);
+        let text = |s: &mut QueryStream<'_>| -> Vec<String> {
+            s.take_messages()
+                .iter()
+                .map(|m| m.message().to_owned())
+                .collect()
+        };
+        assert!(stream
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .as_metadata()
+            .is_some());
+        assert_eq!(text(&mut stream), ["before"]);
+        assert!(stream.next().await.unwrap().unwrap().as_row().is_some());
+        assert!(text(&mut stream).is_empty());
+        assert!(stream
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .as_metadata()
+            .is_some());
+        assert_eq!(text(&mut stream), ["between"]);
+        assert!(stream.next().await.is_none());
+        assert_eq!(text(&mut stream), ["after"]);
+    }
+
+    #[tokio::test]
+    async fn messages_before_the_first_result_are_kept() {
+        let mut stream = query_stream(vec![token_info("before"), token_meta("c")]);
+        stream.forward_to_metadata().await.expect("forward");
+        assert_eq!(stream.take_messages()[0].message(), "before");
+        assert!(stream
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .as_metadata()
+            .is_some());
     }
 
     #[tokio::test]

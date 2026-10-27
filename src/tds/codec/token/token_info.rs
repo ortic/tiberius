@@ -1,11 +1,14 @@
 use super::token_error::decode_error_info_body;
 use crate::SqlReadBytes;
 
-// Fields are decoded from the INFO token and logged at DEBUG on receipt, but
-// are not otherwise read; retained for `Debug` diagnostics and future surfacing
-// of server informational messages to callers.
-#[allow(dead_code)]
-#[derive(Debug)]
+/// An informational message from the server: `PRINT` output, `RAISERROR`
+/// with a severity of 10 or lower, "Changed database context to …". A query
+/// collects those of its batch ([`QueryStream::take_messages`],
+/// [`ExecuteResult::messages`]).
+///
+/// [`QueryStream::take_messages`]: crate::QueryStream::take_messages
+/// [`ExecuteResult::messages`]: crate::ExecuteResult::messages
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenInfo {
     /// info number
     pub(crate) number: u32,
@@ -20,6 +23,42 @@ pub struct TokenInfo {
 }
 
 impl TokenInfo {
+    /// The message number (0 for `PRINT`, 50000 for an ad-hoc `RAISERROR`).
+    pub fn number(&self) -> u32 {
+        self.number
+    }
+
+    /// The state the message was raised with.
+    pub fn state(&self) -> u8 {
+        self.state
+    }
+
+    /// The severity (class): 10 or lower for informational messages; SQL
+    /// Server sends 10 as 0.
+    pub fn class(&self) -> u8 {
+        self.class
+    }
+
+    /// The message text.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// The server that sent it.
+    pub fn server(&self) -> &str {
+        &self.server
+    }
+
+    /// The procedure that sent it; empty for a batch.
+    pub fn procedure(&self) -> &str {
+        &self.procedure
+    }
+
+    /// The line in the batch or procedure.
+    pub fn line(&self) -> u32 {
+        self.line
+    }
+
     pub(crate) async fn decode<R>(src: &mut R) -> crate::Result<Self>
     where
         R: SqlReadBytes + Unpin,

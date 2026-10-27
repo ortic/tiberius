@@ -95,6 +95,55 @@ where
     Ok(())
 }
 
+#[test_on_runtimes]
+async fn print_and_info_messages<S>(mut conn: tiberius::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    // Messages come between the results; taken after each item they keep
+    // their place.
+    let mut stream = conn
+        .simple_query(
+            "PRINT 'before'; SELECT 1; RAISERROR('between', 10, 2) WITH NOWAIT; \
+             SELECT 2; PRINT 'after'",
+        )
+        .await?;
+    let mut seen = Vec::new();
+    let mut raised = None;
+    while let Some(item) = stream.try_next().await? {
+        for m in stream.take_messages() {
+            if m.message() == "between" {
+                raised = Some(m.clone());
+            }
+            seen.push(m.message().to_owned());
+        }
+        if item.as_metadata().is_some() {
+            seen.push("result".to_owned());
+        }
+    }
+    seen.extend(
+        stream
+            .take_messages()
+            .iter()
+            .map(|m| m.message().to_owned()),
+    );
+    assert_eq!(seen, ["before", "result", "between", "result", "after"]);
+    let raised = raised.expect("the RAISERROR message");
+    // SQL Server sends severity 10 as 0.
+    assert_eq!(
+        (raised.number(), raised.class(), raised.state()),
+        (50000, 0, 2)
+    );
+    assert!(raised.line() > 0);
+    drop(stream);
+
+    let result = conn.execute("PRINT 'from execute'", &[]).await?;
+    let messages: Vec<&str> = result.messages().iter().map(|m| m.message()).collect();
+    assert_eq!(messages, ["from execute"]);
+
+    Ok(())
+}
+
 #[test_on_runtimes(connection_string = "DOT_CONN_STR")]
 async fn connect_dot_server_as_localhost<S>(mut conn: tiberius::Client<S>) -> Result<()>
 where
