@@ -546,13 +546,19 @@ mod tests {
     }
 
     #[test]
-    fn parsing_password_non_ascii_is_rejected() {
-        // The ADO parser only accepts ASCII; non-ASCII passwords must use the
-        // programmatic `Config` API instead.
-        assert!("User Id=sa;Password=café".parse::<AdoNetConfig>().is_err());
-        assert!("User Id=sa;Password='café'"
-            .parse::<AdoNetConfig>()
-            .is_err());
+    fn parsing_non_ascii_values() -> crate::Result<()> {
+        // Every delimiter is ASCII, and no byte of a multi-byte UTF-8
+        // sequence is: non-ASCII values read whole, quoted or not.
+        let ado: AdoNetConfig = "User Id=sa;Password=café".parse()?;
+        assert_eq!(AuthMethod::sql_server("sa", "café"), ado.authentication()?);
+        let ado: AdoNetConfig = "User Id=sa;Password='Grüße; ok'".parse()?;
+        assert_eq!(
+            AuthMethod::sql_server("sa", "Grüße; ok"),
+            ado.authentication()?
+        );
+        let ado: AdoNetConfig = "server=tcp:localhost,1433;database={Bücher}".parse()?;
+        assert_eq!(Some("Bücher".to_string()), ado.database());
+        Ok(())
     }
 
     // Every printable-ASCII special character must be usable in a password

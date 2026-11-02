@@ -874,7 +874,7 @@ impl Config {
     /// literal first character is `{` must instead be single- or double-quoted
     /// (e.g. `password='{literal-braces}'`).
     ///
-    /// For non-ASCII passwords, or to avoid escaping entirely, build the
+    /// To avoid escaping entirely, build the
     /// [`Config`] programmatically — the values are passed verbatim:
     ///
     /// ```
@@ -912,7 +912,7 @@ impl Config {
     /// without quoting (JDBC does not trim). Brace quoting cannot hold a literal
     /// `}` (there is no `}}` doubling), though a bare `}` needs no quoting. Do
     /// not URL-encode values, and note that only ASCII is accepted.
-    /// For non-ASCII values, or to avoid escaping entirely, build the
+    /// To avoid escaping entirely, build the
     /// [`Config`] programmatically as shown in [`from_ado_string`]; the values
     /// are passed verbatim.
     ///

@@ -42,13 +42,12 @@ impl AdoNetString {
 /// Parses an ADO.NET connection string. On failure returns a terse reason the
 /// caller turns into a hinted [`crate::Error`].
 pub(crate) fn parse(input: &str) -> Result<AdoNetString, &'static str> {
-    // The parser is byte-oriented for a single reason: every character it
-    // treats specially (`;`, `=`, `'`, `"`, `{`, `}`, whitespace) is ASCII, and
-    // rejecting non-ASCII up front lets the byte index and the char index stay
-    // identical without any multi-byte bookkeeping.
-    if !input.is_ascii() {
-        return Err("the connection string contains non-ASCII characters");
-    }
+    // The parser is byte-oriented: every character it treats specially (`;`,
+    // `=`, `'`, `"`, `{`, `}`, ASCII whitespace) is ASCII, and no byte of a
+    // multi-byte UTF-8 sequence is, so a key or value collected byte by byte
+    // between them is whole UTF-8 again (a database `Bücher`, a password
+    // `Grüße`).
+    let text = |bytes: Vec<u8>| String::from_utf8(bytes).expect("split at ASCII bytes only");
 
     let b = input.as_bytes();
     let n = b.len();
@@ -65,24 +64,24 @@ pub(crate) fn parse(input: &str) -> Result<AdoNetString, &'static str> {
         }
 
         // Key: everything up to the first single `=`. A `==` is a literal `=`.
-        let mut key = String::new();
+        let mut key = Vec::new();
         loop {
             if i >= n || b[i] == b';' {
                 return Err("key-value pairs must be joined by a `=`");
             }
             if b[i] == b'=' {
                 if i + 1 < n && b[i + 1] == b'=' {
-                    key.push('=');
+                    key.push(b'=');
                     i += 2;
                     continue;
                 }
                 i += 1; // consume the separating `=`
                 break;
             }
-            key.push(b[i] as char);
+            key.push(b[i]);
             i += 1;
         }
-        let key = key
+        let key = text(key)
             .trim_matches(|c: char| c.is_ascii_whitespace())
             .to_ascii_lowercase();
         if key.is_empty() {
@@ -97,7 +96,7 @@ pub(crate) fn parse(input: &str) -> Result<AdoNetString, &'static str> {
         let value = if i < n && (b[i] == b'\'' || b[i] == b'"') {
             let quote = b[i];
             i += 1;
-            let mut v = String::new();
+            let mut v = Vec::new();
             loop {
                 if i >= n {
                     return Err(if quote == b'\'' {
@@ -109,21 +108,21 @@ pub(crate) fn parse(input: &str) -> Result<AdoNetString, &'static str> {
                 if b[i] == quote {
                     // A doubled quote is a literal quote; a lone quote closes.
                     if i + 1 < n && b[i + 1] == quote {
-                        v.push(quote as char);
+                        v.push(quote);
                         i += 2;
                         continue;
                     }
                     i += 1;
                     break;
                 }
-                v.push(b[i] as char);
+                v.push(b[i]);
                 i += 1;
             }
             skip_trailing(b, &mut i, "unexpected characters after a quoted value")?;
-            v
+            text(v)
         } else if i < n && b[i] == b'{' {
             i += 1;
-            let mut v = String::new();
+            let mut v = Vec::new();
             loop {
                 if i >= n {
                     return Err("the connection string has an unclosed brace `{`");
@@ -132,7 +131,7 @@ pub(crate) fn parse(input: &str) -> Result<AdoNetString, &'static str> {
                     i += 1;
                     break;
                 }
-                v.push(b[i] as char);
+                v.push(b[i]);
                 i += 1;
             }
             skip_trailing(
@@ -140,7 +139,7 @@ pub(crate) fn parse(input: &str) -> Result<AdoNetString, &'static str> {
                 &mut i,
                 "unexpected characters after a `{…}` value; quote with '' or \"\" if the value contains `}`",
             )?;
-            v
+            text(v)
         } else {
             // Unquoted: runs to the next `;`, with surrounding whitespace
             // trimmed (leading was already skipped above). Trimming uses the
@@ -370,7 +369,17 @@ mod tests {
             parse("k={ab").unwrap_err(),
             "the connection string has an unclosed brace `{`"
         );
-        assert!(parse("k=café").is_err());
+    }
+
+    /// Non-ASCII keys and values read whole: no delimiter is a byte of a
+    /// multi-byte UTF-8 sequence.
+    #[test]
+    fn non_ascii() {
+        assert_eq!(value("k=café", "k").as_deref(), Some("café"));
+        assert_eq!(value("k='Grüße;=x'", "k").as_deref(), Some("Grüße;=x"));
+        assert_eq!(value("k=\"日本\"\"\"", "k").as_deref(), Some("日本\""));
+        assert_eq!(value("k={Ärzte}", "k").as_deref(), Some("Ärzte"));
+        assert_eq!(value("Schlüssel=1", "schlüssel").as_deref(), Some("1"));
     }
 
     // Every printable-ASCII character must round-trip verbatim inside single
