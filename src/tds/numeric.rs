@@ -234,8 +234,11 @@ impl Display for Numeric {
 impl Eq for Numeric {}
 
 impl From<Numeric> for f64 {
+    /// The value over 10^scale in one division, which is the nearest double
+    /// where both are exact (up to 2^53): the integer and fractional parts
+    /// added made 4.56 4.5600000000000005.
     fn from(n: Numeric) -> f64 {
-        n.dec_part() as f64 / n.pow_scale() as f64 + n.int_part() as f64
+        n.value() as f64 / n.pow_scale() as f64
     }
 }
 
