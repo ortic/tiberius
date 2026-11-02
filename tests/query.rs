@@ -95,6 +95,43 @@ where
     Ok(())
 }
 
+/// A result whose rest is still on the wire, or was sent in full but not
+/// read, is cancelled: the server ends it in a message of its own and
+/// acknowledges in the next one. The connection goes on in the same
+/// transaction.
+#[test_on_runtimes]
+async fn cancel_with_rows_left<S>(mut conn: tiberius::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    conn.simple_query("BEGIN TRAN").await?.into_results().await?;
+    for sql in [
+        // Far more than the network buffers: the server is still sending.
+        "SELECT TOP 100000000 a.object_id FROM sys.all_objects a, sys.all_objects b, \
+         sys.all_objects c; SELECT 'second'",
+        // Sent in full before the cancel; the rest isn't read.
+        "SELECT TOP 2000 object_id FROM sys.all_objects",
+    ] {
+        {
+            let mut stream = conn.simple_query(sql).await?;
+            for _ in 0..10 {
+                stream.try_next().await?;
+            }
+        }
+        conn.cancel_query().await?;
+        let row = conn
+            .simple_query("SELECT @@TRANCOUNT, 'next'")
+            .await?
+            .into_row()
+            .await?
+            .expect("the next query's row");
+        assert_eq!(Some(1), row.get::<i32, _>(0), "{sql}");
+        assert_eq!(Some("next"), row.get::<&str, _>(1), "{sql}");
+    }
+    conn.simple_query("ROLLBACK").await?.into_results().await?;
+    Ok(())
+}
+
 #[test_on_runtimes]
 async fn print_and_info_messages<S>(mut conn: tiberius::Client<S>) -> Result<()>
 where

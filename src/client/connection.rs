@@ -457,7 +457,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         self.flush_sink().await?;
         self.poisoned = false;
 
-        TokenStream::new(self).flush_done_attention().await
+        // The server ends the response it cut short (or had already sent in
+        // full while the client hadn't read it all) with a message of its
+        // own, and acknowledges the Attention in the next one: read on past
+        // the end of that message. Each round reads at least one more packet,
+        // so a closed connection ends it with an error.
+        loop {
+            if let Some(done) = TokenStream::new(self).flush_done_attention().await? {
+                return Ok(done);
+            }
+            self.flushed = false;
+        }
     }
 
     /// Cleans the packet stream from previous use. It is important to use the
@@ -1742,5 +1752,118 @@ mod timeout_tests {
             outcome.is_err(),
             "command_timeout must not cut off the connect handshake; connect returned {outcome:?}"
         );
+    }
+}
+
+// Server-free tests for reading the acknowledgement of an Attention: the
+// server sends the end of the response it cut short first, in a message of
+// its own, and acknowledges in the next one.
+#[cfg(test)]
+mod attention_tests {
+    use super::*;
+    use std::pin::Pin;
+
+    /// Serves the given bytes, then a clean EOF; swallows writes.
+    struct ScriptedServer {
+        reply: Vec<u8>,
+        at: usize,
+    }
+
+    impl AsyncRead for ScriptedServer {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _: &mut task::Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<io::Result<usize>> {
+            let n = buf.len().min(self.reply.len() - self.at);
+            buf[..n].copy_from_slice(&self.reply[self.at..self.at + n]);
+            self.at += n;
+            Poll::Ready(Ok(n))
+        }
+    }
+
+    impl AsyncWrite for ScriptedServer {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _: &mut task::Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _: &mut task::Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(self: Pin<&mut Self>, _: &mut task::Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    const DONE: u8 = 0xFD;
+    const DONE_IN_PROC: u8 = 0xFF;
+    const MORE: u16 = 0x1;
+    const ATTENTION: u16 = 0x20;
+
+    /// A tabular result packet, the last of its message or not.
+    fn packet(last: bool, tokens: &[Vec<u8>]) -> Vec<u8> {
+        let payload = tokens.concat();
+        let length = (HEADER_BYTES + payload.len()) as u16;
+        let mut packet = vec![0x04, u8::from(last)];
+        packet.extend_from_slice(&length.to_be_bytes());
+        packet.extend_from_slice(&[0, 0, 1, 0]);
+        packet.extend_from_slice(&payload);
+        packet
+    }
+
+    fn done(ty: u8, status: u16) -> Vec<u8> {
+        let mut token = vec![ty];
+        token.extend_from_slice(&status.to_le_bytes());
+        token.extend_from_slice(&0u16.to_le_bytes());
+        token.extend_from_slice(&0u64.to_le_bytes());
+        token
+    }
+
+    async fn cancel(packets: &[Vec<u8>]) -> crate::Result<TokenDone> {
+        let server = ScriptedServer {
+            reply: packets.concat(),
+            at: 0,
+        };
+        let mut conn = Connection::test_over(server, false);
+        conn.cancel_request().await
+    }
+
+    /// The response cut short ends in a message of its own, over two
+    /// packets; the acknowledgement follows in the next message.
+    #[tokio::test]
+    async fn cancel_reads_past_the_end_of_the_cancelled_response() {
+        let done = cancel(&[
+            packet(false, &[done(DONE_IN_PROC, MORE)]),
+            packet(true, &[done(DONE, 0)]),
+            packet(true, &[done(DONE, ATTENTION)]),
+        ])
+        .await
+        .expect("the acknowledgement in the next message");
+        assert!(done.is_attention());
+    }
+
+    /// An acknowledgement in the message of the response is read there.
+    #[tokio::test]
+    async fn cancel_reads_an_acknowledgement_in_the_same_message() {
+        let done = cancel(&[packet(
+            true,
+            &[done(DONE_IN_PROC, MORE), done(DONE, ATTENTION)],
+        )])
+        .await
+        .expect("the acknowledgement");
+        assert!(done.is_attention());
+    }
+
+    /// Without an acknowledgement before the connection closes, the cancel
+    /// fails instead of waiting for ever.
+    #[tokio::test]
+    async fn cancel_fails_when_the_connection_closes_unacknowledged() {
+        let result = cancel(&[packet(true, &[done(DONE, 0)])]).await;
+        assert!(result.is_err(), "{result:?}");
     }
 }
